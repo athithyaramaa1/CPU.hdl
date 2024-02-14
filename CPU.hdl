@@ -1,0 +1,53 @@
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+   /** Instruction decoding:
+    * There are three d-bits in the instruction, {A, D, M}, which determines which register is to accept the ALU output. **/
+    DMux(in=true, sel=instruction[15], a=isAInstruct, b=isCType);
+    Or(a=isAInstruct, b=instruction[5], out=isARegister);
+    And(a=isCType, b=instruction[4], out=isCInstruct);
+
+    /** A register **/
+    Mux16(a=aluOut, b=instruction, sel=isAInstruct, out=toARegister);
+    ARegister(in=toARegister, load=isARegister, out=aRegisterOut, out[0..14]=addressM);
+
+    /** D register and the ALU **/
+    Mux16(a=aRegisterOut, b=inM, sel=instruction[12], out=inputSelector);
+
+    ALU(x=dRegisterOut, y=inputSelector, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], 
+    f=instruction[7], no=instruction[6], out=aluOut, zr=zrOut, ng=ngOut, out=outM);
+    And(a=isCType, b=instruction[3], out=writeM);
+
+    DRegister(in=aluOut, load=isCInstruct, out=dRegisterOut);
+
+    /** Program Counter:
+    * We need to choose between the operations PC=A and PC++ (the default). The jump condition determines if PC=A happens
+    * or not. As we know from the Hack machine language there are six different conditions, with the exception of the
+    * default JMP, they are JGT, JEQ, JGE, JLT, JNE, and JLE. However, we only need JGT and JLE to cover all cases.
+    * To our aid we have the outputs 'zrOut' and 'ngOut' of the ALU, which determine if the output is zero or negative. 
+    * The first three bits of the instruction specifies the jump condition, what each bit does is seen in Fig. 4.5 in 
+    * The Elements of Computing Systems. **/
+    Or(a=zrOut, b=ngOut, out=leqZero);		// the ALU tells us if out <=0
+    Not(in=leqZero, out=posOut);		// if not, out>0
+
+    And(a=instruction[0], b=posOut, out=isJumpGT);	// if out>0 jump
+    And(a=instruction[1], b=zrOut, out=isJumpEQ);	// if out=0 jump
+    And(a=instruction[2], b=ngOut, out=isJumpLT); 	// if out<0 jump
+    Or(a=isJumpEQ, b=isJumpLT, out=isJumpLE);			// if out<=0 jump
+    Or(a=isJumpGT, b=isJumpLE, out=isJump);			// covers all jump conditions
+
+    And(a=isJump, b=isCType, out=doJump);		// the C instruction tells us to jump
+    Not(in=doJump, out=noJump);			// or increment
+    PC(in=aRegisterOut, load=doJump, inc=noJump, reset=reset, out[0..14]=pc);
+}
